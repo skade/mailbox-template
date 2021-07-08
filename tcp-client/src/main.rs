@@ -13,7 +13,7 @@ fn main() -> std::io::Result<()> {
 
     let mut stream = TcpStream::connect("127.0.0.1:8080")?;
 
-    writeln!(stream, "{}\n", message)?;
+    writeln!(stream, "{}", message)?;
 
     stream.shutdown(Shutdown::Write)?;
 
