@@ -1,25 +1,76 @@
+use redisish;
+
+use std::collections::VecDeque;
 use std::io;
 use std::io::prelude::*;
+use std::io::BufReader;
 use std::net::{TcpListener, TcpStream};
 
-fn handle_client(mut stream: TcpStream) -> Result<(), io::Error> {
-    let mut buffer = String::new();
+#[derive(Debug)]
+enum ServerError {
+    ParseError(redisish::Error),
+    IoError(std::io::Error),
+}
 
-    stream.read_to_string(&mut buffer)?;
+impl From<redisish::Error> for ServerError {
+    fn from(e: redisish::Error) -> ServerError {
+        ServerError::ParseError(e)
+    }
+}
 
-    println!("string: {}", buffer);
+impl From<std::io::Error> for ServerError {
+    fn from(e: std::io::Error) -> ServerError {
+        ServerError::IoError(e)
+    }
+}
 
-    stream.write(buffer.as_bytes())?;
+fn main() -> io::Result<()> {
+    let listener = TcpListener::bind("127.0.0.1:7878").unwrap();
+
+    let mut storage = VecDeque::new();
+
+    for connection in listener.incoming() {
+        let stream = match connection {
+            Ok(stream) => stream,
+            Err(e) => {
+                println!("Error occurred: {:?}", e);
+                continue;
+            }
+        };
+
+        let res = handle(stream, &mut storage);
+
+        if let Err(e) = res {
+            println!("Error occurred: {:?}", e);
+        }
+    }
 
     Ok(())
 }
 
-fn main() -> io::Result<()> {
-    let listener = TcpListener::bind("127.0.0.1:8080")?;
+fn handle(mut stream: TcpStream, storage: &mut VecDeque<String>) -> Result<(), ServerError> {
+    let command = read_command(&mut stream)?;
 
-    // accept connections and process them serially
-    for stream in listener.incoming() {
-        handle_client(stream?)?;
+    match command {
+        redisish::Command::Publish(message) => {
+            storage.push_back(message);
+        }
+        redisish::Command::Retrieve => {
+            let data = storage.pop_front();
+
+            match data {
+                Some(message) => write!(stream, "{}", message)?,
+                None => write!(stream, "No message in inbox!\n")?,
+            }
+        }
     }
     Ok(())
+}
+
+fn read_command(stream: &mut TcpStream) -> Result<redisish::Command, ServerError> {
+    let mut read_buffer = String::new();
+    let mut buffered_stream = BufReader::new(stream);
+    buffered_stream.read_line(&mut read_buffer)?;
+    let command = redisish::parse(&read_buffer)?;
+    Ok(command)
 }
