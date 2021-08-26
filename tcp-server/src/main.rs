@@ -5,6 +5,8 @@ use std::io;
 use std::io::prelude::*;
 use std::io::BufReader;
 use std::net::{TcpListener, TcpStream};
+use std::sync::Arc;
+use std::sync::Mutex;
 
 #[derive(Debug)]
 enum ServerError {
@@ -27,32 +29,36 @@ impl From<std::io::Error> for ServerError {
 fn main() -> Result<(), io::Error> {
     let listener = TcpListener::bind("127.0.0.1:8080").unwrap();
 
-    let mut storage = VecDeque::new();
+    let storage = Arc::new(Mutex::new(VecDeque::new()));
 
     for stream in listener.incoming() {
+    
+        let thread_storage = storage.clone();
+        std::thread::spawn(move || {
+            let res = stream.map_err(|e| e.into() )
+            .and_then(|mut s| {
+               handle(&mut s, &thread_storage)
+            });
 
-        let res = stream.map_err(|e| e.into() )
-                  .and_then(|mut s| {
-                     handle(&mut s, &mut storage)
-                  });
-
-        if let Err(e) = res {
-            println!("Error occured: {:?}", e);
-        }
+            if let Err(e) = res {
+                println!("Error occured: {:?}", e);
+            }
+        });
+        
     }
 
     Ok(())
 }
 
-fn handle(stream: &mut TcpStream, storage: &mut VecDeque<String>) -> Result<(), ServerError> {
+fn handle(stream: &mut TcpStream, storage: &Mutex<VecDeque<String>>) -> Result<(), ServerError> {
     let command = read_command(stream)?;
     match command {
         redisish::Command::Publish(message) => {
-            storage.push_back(message);
+            storage.lock().unwrap().push_back(message);
             Ok(())
         }
         redisish::Command::Retrieve => {
-            let data = storage.pop_front();
+            let data = storage.lock().unwrap().pop_front();
             match data {
                 Some(message) => write!(stream, "{}", message).map_err( |e| e.into() ),
                 None => write!(stream, "No message in inbox!\n").map_err( |e| e.into() )
